@@ -8,7 +8,7 @@ import { loadDefaults } from './defaults';
 import { deviceSigner } from './device';
 import { lookDue, lookForMove } from './move';
 import { queued, waiting } from './queue';
-import { collected, fetchWraps, publish } from './relay';
+import { collected, fetchWraps, publish, watchCollected } from './relay';
 import { fetchNet, type SaveContext } from './save';
 import { chromeStore, KEYS, type Pairing } from './store';
 import type { ToastState } from './toastCopy';
@@ -159,7 +159,7 @@ async function flushAlarm(on: boolean): Promise<void> {
 const work = background({
   store, session, net: fetchNet(publish), now, online: () => navigator.onLine, context,
   openOptions: () => void chrome.runtime.openOptionsPage(),
-  toast, tick, badge, flushAlarm, checkMovesSoon, collected,
+  toast, tick, badge, flushAlarm, checkMovesSoon, collected, watchCollected,
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
 });
 

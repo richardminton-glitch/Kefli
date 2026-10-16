@@ -18,7 +18,7 @@ import { ATTEMPTS_MAX, BLOB_KEEP_MAX, changeQueue, dequeue, enqueue, failed, flu
 import { deliver, prepare, retract, withoutText, type Delivered, type Net, type Pending } from '../src/save';
 import { KEYS, memoryStore, type Pairing } from '../src/store';
 import { applyMove, followMoves } from '../src/move';
-import { retracted, SECOND_LOOK_MS, settleUndo, together, type Found, type Retracted } from '../src/undo';
+import { laterOnPhone, retracted, SECOND_LOOK_MS, settleUndo, together, WATCH_MS, type Found, type Retracted } from '../src/undo';
 import { markDelay, toastCopy } from '../src/toastCopy';
 import { debugText, history, HISTORY_MAX, record } from '../src/debug';
 
@@ -630,5 +630,24 @@ describe('Copy debug info (extension spec 11, decision 108)', () => {
     expect(text).toContain('Waiting: none');
     expect(text).toContain('  none yet');
     expect(text).toContain('Browser: b, offline');
+  });
+});
+
+describe('the watch after Removed from Kefli (decision 101, amended 16 October 2026)', () => {
+  test('tells Already on your phone only when the phone’s deletion arrives', async () => {
+    const told: string[] = [];
+    expect(await laterOnPhone(async () => true, async () => void told.push('onphone'))).toBe(true);
+    expect(await laterOnPhone(async () => false, async () => void told.push('onphone'))).toBe(false);
+    expect(told).toEqual(['onphone']);
+  });
+
+  test('a watch that fails corrects nothing', async () => {
+    const told: string[] = [];
+    expect(await laterOnPhone(async () => { throw new Error('closed'); }, async () => void told.push('onphone'))).toBe(false);
+    expect(told).toEqual([]);
+  });
+
+  test('watches for twenty seconds, well past a nostr app’s signing', () => {
+    expect(WATCH_MS).toBe(20_000);
   });
 });
