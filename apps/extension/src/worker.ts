@@ -19,7 +19,7 @@ import {
 } from './save';
 import { KEYS, type Pairing, type Store } from './store';
 import type { ToastKind, ToastState } from './toastCopy';
-import { moveUndoKey, retracted, settleUndo, together, type Earlier, type Found, type Renamed, type Retracted, type UndoKey, type UndoOutcome } from './undo';
+import { laterOnPhone, moveUndoKey, retracted, settleUndo, together, WATCH_MS, type Earlier, type Found, type Renamed, type Retracted, type UndoKey, type UndoOutcome } from './undo';
 
 /** Where a save's notices go: the tab's toast, the toolbar popup where no toast can run, or nowhere (a link menu). */
 export type Where = number | 'popup' | null;
@@ -44,6 +44,8 @@ export interface Browser {
   checkMovesSoon(): Promise<void>;
   /** Whether the phone has collected a save (relay.ts): null when the relay gave no whole answer. */
   collected(relay: string, wrapId: string, user: string): Promise<Found>;
+  /** Whether the phone's deletion of a wrap arrives within ms (relay.ts watchCollected). */
+  watchCollected(relay: string, wrapId: string, user: string, ms: number): Promise<boolean>;
   wait(ms: number): Promise<void>;
 }
 
@@ -61,6 +63,8 @@ interface UndoOf {
   kept: UndoKey | undefined;
   retractIt(): Promise<Retracted>;
   collected(): Promise<Found>;
+  /** Whether the phone's deletion of one of the save's wraps arrives within WATCH_MS. */
+  watch(): Promise<boolean>;
   forget(): Promise<void>;
 }
 
@@ -428,6 +432,22 @@ export function background(b: Browser) {
     return unknown ? null : false;
   }
 
+  /** Whether the phone's deletion of any of a save's wraps arrives within WATCH_MS, the wraps watched together. */
+  async function watchAny(relay: string, wraps: WentTo[]): Promise<boolean> {
+    const each = await Promise.all(wraps.map((w) => b.watchCollected(relay, w.id, w.user, WATCH_MS)));
+    return each.includes(true);
+  }
+
+  /**
+   * How an Undo that said Removed from Kefli goes on (decision 101, amended 16 October 2026): the phone's deletion is
+   * watched for a while longer, and if it comes the toast is corrected to Already on your phone. Not awaited: the press
+   * is answered already.
+   */
+  function watchAfter(u: UndoOf, ended: Ended): void {
+    if (ended !== 'undone') return;
+    void laterOnPhone(u.watch, () => told(u, 'onphone')).catch(() => undefined);
+  }
+
   /**
    * One Undo of the save under the wrap it goes by now: its wrap retracted with its own key, with any from before a move
    * that may be on the relay, the look for it on the phone, and its key forgotten once it is undone, so a second press
@@ -444,6 +464,7 @@ export function background(b: Browser) {
         return together(each);
       },
       collected: () => collectedAny(ctx.defaults.operator.relay, [{ id, user: ctx.pairing.user_pubkey }, ...earlier]),
+      watch: () => watchAny(ctx.defaults.operator.relay, [{ id, user: ctx.pairing.user_pubkey }, ...earlier]),
       forget: async () => {
         undone.add(id);
         await b.session.remove(`undo:${id}`).catch(() => undefined);
@@ -481,7 +502,9 @@ export function background(b: Browser) {
     if (found.waiting) return unqueue(u, found.waiting, ctx.device).then(() => null);
     const outcome = await settleUndo(u.retractIt, u.collected, b.wait).catch((): UndoOutcome => 'failed');
     // 'absent', for a save that went: its wrap gone from the relay, yet no phone said it took it
-    await told(u, outcome === 'absent' ? 'failed' : outcome);
+    const ended: Ended = outcome === 'absent' ? 'failed' : outcome;
+    await told(u, ended);
+    watchAfter(u, ended);
     return null;
   }
 
@@ -501,6 +524,8 @@ export function background(b: Browser) {
     const went = mayBeOnRelay(waitingSave, u.kept) ? await settleUndo(u.retractIt, u.collected, b.wait).catch((): UndoOutcome => 'failed') : 'undone';
     if (went === 'onphone' || went === 'failed') return told(u, went);
     await u.forget();
+    // a wrap the relay took back may still have been collected first: watched as a save that went is
+    if (mayBeOnRelay(waitingSave, u.kept)) watchAfter(u, 'undone');
     // the title and host come from the sealed request; the queue doesn't keep them in the clear (F31)
     const [s] = await shown([waitingSave], device);
     return toast(u.where, { kind: 'unqueued', title: s.title, host: s.host, link: false });

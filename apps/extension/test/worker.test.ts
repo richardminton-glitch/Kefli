@@ -82,11 +82,14 @@ function harness(
     checkMovesSoon?: Browser['checkMovesSoon'];
     /** The phone's deletions on the relay, by wrap and library, in place of the answers in `collected`. */
     found?: Browser['collected'];
+    /** What the watch after Removed from Kefli finds: the phone's deletion arriving later (decision 101, amended). */
+    watched?: boolean;
   } = {},
 ) {
   const store = o.store ?? memoryStore();
   const session = o.session ?? memoryStore();
   const toasts: Omit<ToastState, 'shortcut'>[] = [];
+  const watched = { n: 0 };
   const alarm = { on: false, cleared: 0 };
   const opened = { n: 0 };
   const answers = [...(o.collected ?? [])];
@@ -113,9 +116,14 @@ function harness(
     checkMovesSoon: o.checkMovesSoon ?? (async () => undefined),
     // the relay's answers to Undo's looks for the phone's deletion, in turn; null is no answer, and past the last, not there
     collected: o.found ?? (async () => (answers.length ? answers.shift()! : false)),
+    // the watch after Removed from Kefli: whether the phone's deletion arrives later (decision 101, amended)
+    watchCollected: async () => {
+      watched.n++;
+      return o.watched ?? false;
+    },
     wait: async () => undefined,
   };
-  return { store, session, toasts, alarm, opened, clock, work: background(b) };
+  return { store, session, toasts, alarm, opened, watched, clock, work: background(b) };
 }
 
 const kinds = (t: { kind: string }[]) => t.map((x) => x.kind);
@@ -300,6 +308,33 @@ describe('Undo (F24, F40)', () => {
     await later.work.save(PAGE, 1, false);
     await later.work.undo(later.toasts[0].id!, 1);
     expect(later.toasts.at(-1)!.kind).toBe('undone');
+  });
+
+  test('Removed from Kefli is corrected to Already on your phone when the phone’s deletion arrives later (decision 101, amended)', async () => {
+    // both looks miss it, as on a phone signing through a nostr app; the watch after the toast finds it
+    const h = harness({ collected: [false, false], watched: true });
+    await h.work.save(PAGE, 1, false);
+    const id = h.toasts[0].id!;
+    await h.work.undo(id, 1);
+    expect(h.toasts.at(-1)!.kind).toBe('undone');
+    await until(() => h.toasts.at(-1)!.kind === 'onphone');
+    expect(h.watched.n).toBe(1);
+    expect(await h.session.get(`undo:${id}`)).toBeFalsy();
+  });
+
+  test('a save found on the phone at a look, or one Undo couldn’t take back, starts no watch', async () => {
+    const onPhone = harness({ collected: [true], watched: true });
+    await onPhone.work.save(PAGE, 1, false);
+    await onPhone.work.undo(onPhone.toasts[0].id!, 1);
+    expect(onPhone.toasts.at(-1)!.kind).toBe('onphone');
+    const failed = harness({ net: net({ publish: 'down' }).net, collected: [null, null], watched: true });
+    await failed.work.save(PAGE, 1, false);
+    await until(() => failed.toasts.length >= 2);
+    const id = failed.toasts[0].id!;
+    await failed.work.undo(id, 1);
+    expect(failed.toasts.at(-1)!.kind).toBe('undofailed');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onPhone.watched.n + failed.watched.n).toBe(0);
   });
 
   test('a key the session no longer holds still finds a save on the phone, or says Undo couldn’t', async () => {
@@ -2204,6 +2239,7 @@ describe('a move while saves wait, their toasts still showing (contract 4.4 and 
     test('one that joins the queue after the move wrapped it again goes to the new library with its token, and Undo follows it', async () => {
       const n = net();
       const toasts: Omit<ToastState, 'shortcut'>[] = [];
+  const watched = { n: 0 };
       let moving: Promise<Pairing | null> | undefined;
       // the half-hourly look (bg.ts checkMoves) takes the move while Saving… shows, the save's own look skipped
       const h: ReturnType<typeof harness> = harness({

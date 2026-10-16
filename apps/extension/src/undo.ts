@@ -53,6 +53,24 @@ export async function moveUndoKey(session: Store, was: string, to: string, wrapK
 export const SECOND_LOOK_MS = 1500;
 
 /**
+ * How long Undo keeps watching for the phone's deletion after it has said Removed from Kefli (decision 101, amended
+ * 16 October 2026): on a phone that signs through a nostr app the deletion came five seconds after Undo's second look.
+ */
+export const WATCH_MS = 20_000;
+
+/**
+ * Undo's watch after it said Removed from Kefli: `watch` resolves true when the phone's deletion of the wrap arrives
+ * within WATCH_MS, and then `tell` corrects what was said to Already on your phone. True when it was corrected. A watch
+ * that fails corrects nothing: what was said stands.
+ */
+export async function laterOnPhone(watch: () => Promise<boolean>, tell: () => Promise<void>): Promise<boolean> {
+  const found = await watch().catch(() => false);
+  if (!found) return false;
+  await tell();
+  return true;
+}
+
+/**
  * What a retraction came to (contract 3.2): the relay took it; it refused it as `blocked:`, its answer to a kind 5 from a
  * wrap's own key naming a wrap it doesn't hold, so there was nothing there to take back; or it couldn't be made, the relay
  * out of reach or unanswered, or refusing it for now (rate-limited), so a wrap the relay holds is still there.

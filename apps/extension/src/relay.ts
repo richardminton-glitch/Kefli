@@ -106,6 +106,8 @@ export interface Answer {
 interface Limits {
   ms: number;
   most: number;
+  /** Keep reading past the relay's EOSE, for events still to come, until `most` or `ms` (watchCollected). */
+  past?: boolean;
 }
 
 /**
@@ -138,7 +140,7 @@ function answer(relay: Relay, filters: Filter[], limits: Limits): Promise<Answer
         got.set(e.id, e as NostrEvent);
         if (got.size >= limits.most) end(false, `${limits.most} events`);
       },
-      oneose: () => end(true, 'EOSE'),
+      oneose: () => void (limits.past || end(true, 'EOSE')),
       // a relay's CLOSED may carry anything as its reason
       onclose: (reason) => end(false, `closed: ${String(reason)}`, true),
     });
@@ -190,4 +192,17 @@ export async function collected(url: string, wrapId: string, user: string): Prom
   if (!relay) return null;
   const got = heard(url, await answer(relay, [{ kinds: [5], authors: [user], '#e': [wrapId], limit: 1 }], { ms: left(until), most: 1 }));
   return got.events.length > 0 || (got.whole ? false : null);
+}
+
+/**
+ * Whether the phone's deletion of a wrap arrives within `ms`, the read kept open past EOSE for it (decision 101, amended
+ * 16 October 2026): a phone whose signatures go through a nostr app can publish it some seconds after Undo's looks, so
+ * Undo keeps watching after it has said Removed from Kefli, and says Already on your phone when it comes. False when it
+ * doesn't come in time, or the relay can't be reached.
+ */
+export async function watchCollected(url: string, wrapId: string, user: string, ms: number): Promise<boolean> {
+  const relay = await pool.get(url).catch(() => null);
+  if (!relay) return false;
+  const got = await answer(relay, [{ kinds: [5], authors: [user], '#e': [wrapId], limit: 1 }], { ms, most: 1, past: true });
+  return got.events.length > 0;
 }
